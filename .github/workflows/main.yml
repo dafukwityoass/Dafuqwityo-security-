@@ -25,5 +25,5 @@ flowchart TD
     RiskAI --> ConsensusEngine
     HumanSOC --> ConsensusEngine
     ConsensusEngine --> SOAR
-    SOAR --> Infrastructure
+    SOAR --> AttestationLedger
     SOAR --> AttestationLedger
