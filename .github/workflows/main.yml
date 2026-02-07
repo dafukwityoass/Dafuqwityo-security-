@@ -1,0 +1,29 @@
+# Constitutional Cyber Defense Platform (CCDP)
+
+## 1. Overview
+
+The Constitutional Cyber Defense Platform (CCDP) is a distributed, autonomous security system designed to detect, evaluate, and respond to cyber threats while enforcing immutable governance constraints. CCDP combines AI-driven detection, cryptographic attestation, Byzantine-fault-tolerant consensus, and policy-as-constitution enforcement to ensure that no defensive action occurs without legitimacy, auditability, and compliance.
+
+Unlike traditional SOAR or SIEM systems, CCDP assumes:
+- Partial system compromise is inevitable
+- AI models may fail or be adversarially influenced
+- No single authority is trustworthy
+- Compliance is a first-class runtime concern
+
+CCDP is built to survive hostile environments, including nation-state threat models.
+
+---
+
+## 2. High-Level Architecture
+
+```mermaid
+flowchart TD
+    Sensors --> DetectionAI
+    DetectionAI --> AttestationLedger
+    DetectionAI --> PolicyAI
+    PolicyAI --> ConsensusEngine
+    RiskAI --> ConsensusEngine
+    HumanSOC --> ConsensusEngine
+    ConsensusEngine --> SOAR
+    SOAR --> Infrastructure
+    SOAR --> AttestationLedger
