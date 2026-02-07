@@ -1,0 +1,244 @@
+version: '3.8'
+
+services:
+  # Main Application Services
+  paymentus-api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.production
+    environment:
+      - ENVIRONMENT=production
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=paymentus_production
+      - STRIPE_API_KEY=${STRIPE_SECRET_KEY}
+      - PLAID_CLIENT_ID=${PLAID_CLIENT_ID}
+      - PLAID_SECRET=${PLAID_SECRET}
+      - PLAID_ENV=production
+      - JWT_SECRET=${JWT_SECRET_KEY}
+      - OFAC_API_KEY=${OFAC_API_KEY}
+      - CORS_ORIGINS=${ALLOWED_ORIGINS}
+    volumes:
+      - api_logs:/app/logs
+      - encryption_keys:/app/keys:ro
+    ports:
+      - "8001:8001"
+    depends_on:
+      - mongo
+      - redis
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - paymentus_network
+    security_opt:
+      - no-new-privileges:true
+
+  paymentus-frontend:
+    build:
+      context: ../frontend  
+      dockerfile: Dockerfile.production
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_BACKEND_URL=${BACKEND_URL}
+    ports:
+      - "3000:80"
+    depends_on:
+      - paymentus-api
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+    networks:
+      - paymentus_network
+
+  # Database Services
+  mongo:
+    image: mongo:6.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: paymentus_production
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "27017:27017"
+    command: mongod --auth --bind_ip_all --replSet rs0
+    networks:
+      - paymentus_network
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - paymentus_network
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # Security & Infrastructure
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - paymentus-api
+      - paymentus-frontend
+    networks:
+      - paymentus_network
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # Monitoring & Observability
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - paymentus_network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: grafana
+      GF_DATABASE_USER: grafana
+      GF_DATABASE_PASSWORD: ${GRAFANA_DB_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - postgres
+      - prometheus
+    networks:
+      - paymentus_network
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: grafana
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: ${GRAFANA_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - paymentus_network
+
+  # Backup & Recovery
+  backup:
+    image: mongo:6.0
+    environment:
+      MONGO_URI: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/paymentus_production?authSource=admin
+    volumes:
+      - backup_data:/backup
+      - ./scripts:/scripts:ro
+    command: /scripts/backup.sh
+    depends_on:
+      - mongo
+    networks:
+      - paymentus_network
+    deploy:
+      restart_policy:
+        condition: none
+
+  # Log Management
+  elasticsearch:
+    image: elasticsearch:8.8.0
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - paymentus_network
+
+  logstash:
+    image: logstash:8.8.0
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - api_logs:/logs:ro
+    depends_on:
+      - elasticsearch
+    networks:
+      - paymentus_network
+
+  kibana:
+    image: kibana:8.8.0
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - paymentus_network
+
+volumes:
+  mongo_data:
+    driver: local
+  mongo_config:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  api_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+  backup_data:
+    driver: local
+  encryption_keys:
+    driver: local
+
+networks:
+  paymentus_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
